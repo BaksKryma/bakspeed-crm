@@ -1,0 +1,27 @@
+{
+  "name": "bakspeed-crm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CRM/TMS для Bakspeed Sp. z o.o. — Supabase + React + Cloudflare Pages",
+  "workspaces": [
+    "app",
+    "scripts"
+  ],
+  "scripts": {
+    "dev": "npm --workspace app run dev",
+    "build": "npm --workspace app run build",
+    "preview": "npm --workspace app run preview",
+    "lint": "npm --workspace app run lint",
+    "typecheck": "npm --workspace app run typecheck",
+    "db:reset": "supabase db reset",
+    "db:push": "supabase db push",
+    "db:types": "supabase gen types typescript --linked > app/src/types/supabase.ts",
+    "functions:serve": "supabase functions serve",
+    "functions:deploy": "supabase functions deploy",
+    "import:loadsinfo": "npm --workspace scripts run import:loadsinfo",
+    "import:bktrans": "npm --workspace scripts run import:bktrans"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
