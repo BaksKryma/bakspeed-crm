@@ -1,0 +1,58 @@
+/* Bakspeed CRM — extras поверх Tailwind CDN */
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', 'ui-monospace', monospace;
+}
+
+/* Simple scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.30); }
+
+/* Loader */
+.loader {
+  width: 18px; height: 18px;
+  border: 2px solid #e5e7eb; border-top-color: #F97316;
+  border-radius: 50%; display: inline-block;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Toast */
+.toast {
+  position: fixed; top: 1rem; right: 1rem;
+  background: #0F172A; color: white; padding: 0.75rem 1rem;
+  border-radius: 0.5rem; z-index: 9999; font-size: 0.875rem;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+  animation: slide-in 0.2s ease-out;
+}
+.toast.error { background: #DC2626; }
+.toast.success { background: #16A34A; }
+@keyframes slide-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Drawer */
+.drawer-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 40;
+  animation: fade-in 0.15s ease;
+}
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(95vw, 1100px); background: white; z-index: 50;
+  overflow-y: auto; box-shadow: -10px 0 40px rgba(0,0,0,0.15);
+  animation: slide-right 0.2s ease;
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
+
+/* Links within tables */
+.table-link { color: #EA580C; text-decoration: none; }
+.table-link:hover { text-decoration: underline; }
+
+/* Focus ring */
+input:focus, select:focus, textarea:focus, button:focus-visible {
+  outline: 2px solid #F97316; outline-offset: 1px;
+}
+
+/* Better disabled look */
+button:disabled { opacity: 0.5; cursor: not-allowed; }

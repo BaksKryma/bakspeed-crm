@@ -39,7 +39,8 @@
       "Bash(~/.local/bin/gh auth *)",
       "mcp__69f28225-8325-4226-8cb7-7cf8593bdd25__execute_sql",
       "Bash(curl -s -X POST \"https://fzhfbunluqsqtgbhmlia.supabase.co/functions/v1/nbp_daily_sync\" -H \"Content-Type: application/json\" -d '{\"from\":\"2025-07-01\",\"to\":\"2025-09-30\"}')",
-      "mcp__69f28225-8325-4226-8cb7-7cf8593bdd25__get_advisors"
+      "mcp__69f28225-8325-4226-8cb7-7cf8593bdd25__get_advisors",
+      "Bash(~/.local/bin/gh repo *)"
     ]
   }
 }
