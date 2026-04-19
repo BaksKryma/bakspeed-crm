@@ -13,7 +13,7 @@ const h = React.createElement;
 const SUPABASE_URL = 'https://fzhfbunluqsqtgbhmlia.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_y6_R0sTpnXtefyo70Yeegw_urv0GZgX';
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce' },
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, flowType: 'pkce' },
 });
 
 // ========= Toast =========
@@ -1120,6 +1120,26 @@ function App() {
   return html`<${Shell}>${page}<//>`;
 }
 
-createRoot(document.getElementById('root')).render(
-  h(RouterProvider, null, h(AuthProvider, null, h(App))),
-);
+// Handle magic-link PKCE callback before mounting React.
+// Supabase redirects with ?code=<uuid> — exchange it for a session, then clean URL.
+async function bootstrap() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const code = params.get('code');
+    if (code) {
+      const { error } = await sb.auth.exchangeCodeForSession(code);
+      if (error) toast('Auth: ' + error.message, 'error');
+      // Strip ?code=... and keep the hash (hash-based routing)
+      history.replaceState({}, '', location.pathname + location.hash);
+    }
+    // Also handle legacy implicit-flow tokens if they ever show up as ?access_token=
+    const err = params.get('error_description') || params.get('error');
+    if (err) toast('Auth: ' + err, 'error');
+  } catch (e) {
+    toast('Bootstrap error: ' + e.message, 'error');
+  }
+  createRoot(document.getElementById('root')).render(
+    h(RouterProvider, null, h(AuthProvider, null, h(App))),
+  );
+}
+bootstrap();
