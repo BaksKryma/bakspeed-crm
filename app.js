@@ -16,15 +16,22 @@ const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, flowType: 'pkce' },
 });
 
-// ========= Toast =========
-let toastTimer;
+// ========= Toast (stacked, independent timers) =========
+function repositionToasts() {
+  const list = Array.from(document.querySelectorAll('.toast'));
+  list.forEach((el, i) => { el.style.top = `${1 + i * 3.25}rem`; });
+}
 function toast(msg, kind = '') {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
   el.textContent = msg;
   document.body.appendChild(el);
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.remove(), 3500);
+  repositionToasts();
+  setTimeout(() => {
+    el.style.transition = 'opacity 0.2s';
+    el.style.opacity = '0';
+    setTimeout(() => { el.remove(); repositionToasts(); }, 200);
+  }, 3500);
 }
 
 // ========= Utils =========
@@ -383,7 +390,7 @@ function OrdersPage() {
   const load = useCallback(async () => {
     setLoading(true);
     let q = sb.from('orders')
-      .select('id, our_order_number, client_order_number, loading_date, unloading_date, loading_place, unloading_place, status, turnover_netto_eur, delta_netto_eur, client:clients(company_name), carrier:carriers(company_name), manager:managers(code)')
+      .select('id, our_order_number, client_order_number, loading_date, unloading_date, loading_place, unloading_place, status, turnover_netto_eur, delta_netto_eur, client:clients(company_name), carrier:carriers(company_name), manager:managers!manager_id(code)')
       .order('loading_date', { ascending: false }).limit(300);
     if (status !== 'all') q = q.eq('status', status);
     if (search) q = q.or(`our_order_number.ilike.%${search}%,client_order_number.ilike.%${search}%`);
@@ -480,10 +487,12 @@ function OrderCreate({ onClose, onCreated }) {
     setRefs({ clients: c.data ?? [], carriers: cr.data ?? [], managers: m.data ?? [], trucks: t.data ?? [] });
   })(); }, []);
 
-  const resolveGeo = async (side) => {
+  const resolveGeo = async (side, force = false) => {
     const placeKey = side + '_place';
     const code = form[placeKey];
     if (!code) return;
+    // Don't re-geocode on blur if city already set (only force via 🔍 button)
+    if (!force && form[side + '_city']) return;
     setGeoBusy((b) => ({ ...b, [side]: true }));
     const geo = await geocodePlace(code);
     setGeoBusy((b) => ({ ...b, [side]: false }));
@@ -548,7 +557,7 @@ function OrderCreate({ onClose, onCreated }) {
                 <input className=${inp} placeholder="DE 60486" value=${form.loading_place ?? ''}
                   onChange=${upd('loading_place')}
                   onBlur=${() => resolveGeo('loading')} />
-                <button type="button" onClick=${() => resolveGeo('loading')}
+                <button type="button" onClick=${() => resolveGeo('loading', true)}
                   disabled=${geoBusy.loading}
                   className="h-9 px-2 rounded-md border text-sm whitespace-nowrap"
                   title="Знайти в OSM">🔍</button>
@@ -578,7 +587,7 @@ function OrderCreate({ onClose, onCreated }) {
                 <input className=${inp} placeholder="AT 2282" value=${form.unloading_place ?? ''}
                   onChange=${upd('unloading_place')}
                   onBlur=${() => resolveGeo('unloading')} />
-                <button type="button" onClick=${() => resolveGeo('unloading')}
+                <button type="button" onClick=${() => resolveGeo('unloading', true)}
                   disabled=${geoBusy.unloading}
                   className="h-9 px-2 rounded-md border text-sm whitespace-nowrap"
                   title="Знайти в OSM">🔍</button>
@@ -681,7 +690,7 @@ function OrderDetail({ id, onClose, onSaved }) {
     setLoadErr(null);
     try {
       const { data, error } = await sb.from('orders')
-        .select('*, client:clients(*), manager:managers(*), carrier:carriers(*), truck:trucks(*), driver:drivers(*)')
+        .select('*, client:clients(*), manager:managers!manager_id(*), carrier:carriers(*), truck:trucks(*), driver:drivers(*)')
         .eq('id', id).maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('Замовлення не знайдено (можливо прибрано RLS).');
