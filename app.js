@@ -647,6 +647,21 @@ function CrudPage({ title, table, columns, searchField, defaultOrder = 'created_
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState(null); // object or null
+  const [fkOpts, setFkOpts] = useState({}); // { columnKey: [{value,label}] }
+
+  // Load FK options once
+  useEffect(() => { void (async () => {
+    const fkCols = columns.filter((c) => c.fk);
+    if (!fkCols.length) return;
+    const out = {};
+    for (const c of fkCols) {
+      const { data } = await sb.from(c.fk.table).select(`id, ${c.fk.label}`).order(c.fk.label);
+      out[c.key] = (data ?? []).map((r) => ({ value: r.id, label: r[c.fk.label] }));
+    }
+    setFkOpts(out);
+  })(); }, [columns]);
+
+  const fkLabel = (colKey, value) => fkOpts[colKey]?.find((o) => o.value === value)?.label ?? value;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -701,7 +716,9 @@ function CrudPage({ title, table, columns, searchField, defaultOrder = 'created_
               rows.length === 0 ? html`<tr><td colSpan=${columns.length + 1} className="p-6 text-center text-slate-500">Немає даних</td></tr>` :
               rows.map((r) => html`
                 <tr key=${r.id} className="border-t hover:bg-slate-50">
-                  ${columns.map((c) => html`<td key=${c.key} className="p-3">${c.render ? c.render(r[c.key], r) : (r[c.key] ?? '—')}</td>`)}
+                  ${columns.map((c) => html`<td key=${c.key} className="p-3">
+                    ${c.render ? c.render(r[c.key], r) : (c.fk ? (fkLabel(c.key, r[c.key]) ?? '—') : (r[c.key] ?? '—'))}
+                  </td>`)}
                   <td className="p-3 text-right">
                     <button onClick=${() => setEditing(r)} className="text-xs text-brand mr-2">✏️</button>
                     <button onClick=${() => del(r.id)} className="text-xs text-red-600">🗑</button>
@@ -715,25 +732,28 @@ function CrudPage({ title, table, columns, searchField, defaultOrder = 'created_
       ${editing !== null ? html`
         <${Drawer} title=${editing.id ? 'Редагувати' : 'Новий запис'} onClose=${() => setEditing(null)}>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            ${columns.map((c) => html`
-              <div key=${c.key} className="space-y-1">
-                <label className="text-sm font-medium">${c.label}</label>
-                ${c.options ? html`
-                  <select value=${editing[c.key] ?? ''} onChange=${(e) => setEditing((v) => ({ ...v, [c.key]: e.target.value || null }))}
-                    className="w-full h-9 px-3 rounded-md border border-slate-300">
-                    <option value="">—</option>
-                    ${c.options.map((o) => html`<option key=${String(o.value)} value=${o.value}>${o.label}</option>`)}
-                  </select>
-                ` : c.type === 'boolean' ? html`
-                  <input type="checkbox" checked=${Boolean(editing[c.key])}
-                    onChange=${(e) => setEditing((v) => ({ ...v, [c.key]: e.target.checked }))} />
-                ` : html`
-                  <input type=${c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'}
-                    value=${editing[c.key] ?? ''} onChange=${(e) => setEditing((v) => ({ ...v, [c.key]: e.target.value }))}
-                    className="w-full h-9 px-3 rounded-md border border-slate-300" />
-                `}
-              </div>
-            `)}
+            ${columns.map((c) => {
+              const opts = c.fk ? (fkOpts[c.key] ?? []) : c.options;
+              return html`
+                <div key=${c.key} className="space-y-1">
+                  <label className="text-sm font-medium">${c.label}</label>
+                  ${opts ? html`
+                    <select value=${editing[c.key] ?? ''} onChange=${(e) => setEditing((v) => ({ ...v, [c.key]: e.target.value || null }))}
+                      className="w-full h-9 px-3 rounded-md border border-slate-300">
+                      <option value="">—</option>
+                      ${opts.map((o) => html`<option key=${String(o.value)} value=${o.value}>${o.label}</option>`)}
+                    </select>
+                  ` : c.type === 'boolean' ? html`
+                    <input type="checkbox" checked=${Boolean(editing[c.key])}
+                      onChange=${(e) => setEditing((v) => ({ ...v, [c.key]: e.target.checked }))} />
+                  ` : html`
+                    <input type=${c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'}
+                      value=${editing[c.key] ?? ''} onChange=${(e) => setEditing((v) => ({ ...v, [c.key]: e.target.value }))}
+                      className="w-full h-9 px-3 rounded-md border border-slate-300" />
+                  `}
+                </div>
+              `;
+            })}
           </div>
           <div className="flex gap-2 pt-4">
             <button onClick=${save} className="h-9 px-4 rounded-md bg-brand text-white">Зберегти</button>
@@ -1023,7 +1043,8 @@ function SettingsPage() {
         { key: 'is_active', label: 'Активний', type: 'boolean' },
       ]} />` : null}
       ${tab === 'trucks' ? html`<${CrudPage} title="Вантажівки" table="trucks" searchField="name" columns=${[
-        { key: 'name', label: 'Код' }, { key: 'carrier_id', label: 'Перевізник (id)' },
+        { key: 'name', label: 'Код' },
+        { key: 'carrier_id', label: 'Перевізник', fk: { table: 'carriers', label: 'company_name' } },
         { key: 'tractor_plate', label: 'Тягач' }, { key: 'trailer_plate', label: 'Причіп' },
         { key: 'body_type', label: 'Кузов' }, { key: 'capacity_kg', label: 'Вант., кг', type: 'number' },
         { key: 'has_adr_equipment', label: 'ADR', type: 'boolean' },
@@ -1031,7 +1052,9 @@ function SettingsPage() {
       ]} />` : null}
       ${tab === 'drivers' ? html`<${CrudPage} title="Водії" table="drivers" searchField="full_name" columns=${[
         { key: 'full_name', label: 'Ім\'я' }, { key: 'phone', label: 'Телефон' },
-        { key: 'carrier_id', label: 'Перевізник (id)' }, { key: 'licence_number', label: 'Права №' },
+        { key: 'carrier_id', label: 'Перевізник', fk: { table: 'carriers', label: 'company_name' } },
+        { key: 'current_truck_id', label: 'Вантажівка', fk: { table: 'trucks', label: 'name' } },
+        { key: 'licence_number', label: 'Права №' },
         { key: 'licence_expiry', label: 'Права до', type: 'date' },
         { key: 'has_adr_cert', label: 'ADR', type: 'boolean' },
         { key: 'adr_cert_expiry', label: 'ADR до', type: 'date' },
