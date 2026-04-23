@@ -98,6 +98,38 @@ const Link = ({ to, children, className }) => {
   return html`<a href=${'#' + to} className=${className} onClick=${(e) => { e.preventDefault(); navigate(to); }}>${children}</a>`;
 };
 
+// ========= Recovery: set new password =========
+function RecoveryPassword({ onDone }) {
+  const [p1, setP1] = useState('');
+  const [p2, setP2] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async (e) => {
+    e.preventDefault();
+    if (p1.length < 6) return toast('Мін. 6 символів', 'error');
+    if (p1 !== p2) return toast('Паролі не збігаються', 'error');
+    setBusy(true);
+    const { error } = await sb.auth.updateUser({ password: p1 });
+    setBusy(false);
+    if (error) return toast(error.message, 'error');
+    sessionStorage.removeItem('recovery_mode');
+    toast('Пароль встановлено', 'success');
+    onDone();
+  };
+  const inp = 'w-full h-10 px-3 rounded-md border border-slate-300 mb-3';
+  return html`
+    <div className="min-h-screen grid place-items-center bg-gradient-to-br from-orange-100 to-white">
+      <form onSubmit=${save} className="bg-white p-8 rounded-2xl shadow-lg w-[min(420px,90vw)]">
+        <div className="text-2xl font-bold text-brand">Bakspeed</div>
+        <div className="text-xs text-slate-500 tracking-widest mb-6">SPEED YOU CAN TRUST</div>
+        <div className="font-semibold mb-3">Встановіть пароль</div>
+        <input type="password" required autoFocus placeholder="Новий пароль" value=${p1} onChange=${(e) => setP1(e.target.value)} className=${inp} />
+        <input type="password" required placeholder="Повторіть пароль" value=${p2} onChange=${(e) => setP2(e.target.value)} className=${inp} />
+        <button type="submit" disabled=${busy} className="w-full h-10 rounded-md bg-brand text-white font-medium">${busy ? 'Зачекайте…' : 'Зберегти'}</button>
+      </form>
+    </div>
+  `;
+}
+
 // ========= Sign-in page =========
 function SignIn() {
   const [mode, setMode] = useState('password'); // 'password' | 'magic'
@@ -1319,12 +1351,14 @@ function DriverWebview({ token }) {
 function App() {
   const { session, ready } = useAuth();
   const { path } = useRouter();
+  const [recovery, setRecovery] = useState(() => !!sessionStorage.getItem('recovery_mode'));
 
   // Driver webview — public route
   const driverToken = path.match(/^\/d\/(.+)$/)?.[1];
   if (driverToken) return html`<${DriverWebview} token=${driverToken} />`;
 
   if (!ready) return html`<div className="min-h-screen grid place-items-center"><span className="loader" /></div>`;
+  if (recovery && session) return html`<${RecoveryPassword} onDone=${() => setRecovery(false)} />`;
   if (!session) return html`<${SignIn} />`;
 
   let page;
@@ -1342,8 +1376,9 @@ function App() {
   return html`<${Shell}>${page}<//>`;
 }
 
-// Handle magic-link PKCE callback before mounting React.
-// Supabase redirects with ?code=<uuid> — exchange it for a session, then clean URL.
+// Bootstrap: handle auth callbacks before React mounts.
+// - Magic link (PKCE): ?code=<uuid> → exchangeCodeForSession
+// - Password recovery / implicit magic link: #access_token=...&refresh_token=...&type=recovery
 async function bootstrap() {
   try {
     const params = new URLSearchParams(location.search);
@@ -1351,10 +1386,23 @@ async function bootstrap() {
     if (code) {
       const { error } = await sb.auth.exchangeCodeForSession(code);
       if (error) toast('Auth: ' + error.message, 'error');
-      // Strip ?code=... and keep the hash (hash-based routing)
       history.replaceState({}, '', location.pathname + location.hash);
     }
-    // Also handle legacy implicit-flow tokens if they ever show up as ?access_token=
+
+    // Implicit-flow tokens (recovery email, OAuth callbacks)
+    if (location.hash.startsWith('#access_token=') || location.hash.includes('access_token=')) {
+      const h = new URLSearchParams(location.hash.slice(1));
+      const access_token = h.get('access_token');
+      const refresh_token = h.get('refresh_token');
+      const type = h.get('type');
+      if (access_token && refresh_token) {
+        const { error } = await sb.auth.setSession({ access_token, refresh_token });
+        if (error) toast('Auth: ' + error.message, 'error');
+        if (type === 'recovery') sessionStorage.setItem('recovery_mode', '1');
+        history.replaceState({}, '', location.pathname);
+      }
+    }
+
     const err = params.get('error_description') || params.get('error');
     if (err) toast('Auth: ' + err, 'error');
   } catch (e) {
