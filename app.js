@@ -640,6 +640,24 @@ function OrderCreate({ onClose, onCreated }) {
             <label className=${lbl}>Payment term перевізнику (дн)</label>
             <input className=${inp} type="number" value=${form.payment_term_carrier_days} onChange=${upd('payment_term_carrier_days')} />
           </div>
+          <div>
+            <label className=${lbl}>Документи від клієнта</label>
+            <select className=${inp} value=${form.client_docs_form ?? 'none'} onChange=${upd('client_docs_form')}>
+              <option value="none">Ще не отримано</option>
+              <option value="scans">Скани</option>
+              <option value="originals">Оригінали</option>
+              <option value="mixed">Змішано</option>
+            </select>
+          </div>
+          <div>
+            <label className=${lbl}>Документи від перевізника</label>
+            <select className=${inp} value=${form.carrier_docs_form ?? 'none'} onChange=${upd('carrier_docs_form')}>
+              <option value="none">Ще не отримано</option>
+              <option value="scans">Скани</option>
+              <option value="originals">Оригінали</option>
+              <option value="mixed">Змішано</option>
+            </select>
+          </div>
         </div>
 
         <div className="flex gap-2 pt-2">
@@ -747,6 +765,8 @@ function OrderDetail({ id, onClose, onSaved }) {
             <${R} k="Курс NBP" v=${order.nbp_pln_per_eur ? `${order.nbp_pln_per_eur} PLN/EUR · ${order.nbp_rate_date}` : null} />
             <${R} k="Оплата клієнта" v=${`${DATE(order.payment_due_date_client)} · ${order.payment_received_client ? 'отримано' : 'очікується'}`} />
             <${R} k="Оплата перевізнику" v=${`${DATE(order.payment_due_date_carrier)} · ${order.paid_to_carrier ? 'сплачено' : 'очікується'}`} />
+            <${R} k="Документи клієнта" v=${({ none: 'Ще не отримано', scans: '📄 Скани', originals: '📜 Оригінали', mixed: 'Змішано' })[order.client_docs_form ?? 'none']} />
+            <${R} k="Документи перевізника" v=${({ none: 'Ще не отримано', scans: '📄 Скани', originals: '📜 Оригінали', mixed: 'Змішано' })[order.carrier_docs_form ?? 'none']} />
           </div>
         </div>
       ` : null}
