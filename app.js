@@ -440,13 +440,35 @@ function Drawer({ children, onClose, title }) {
   `;
 }
 
+// Geocode "DE 60486" (or "DE", "60486") via Nominatim → { city, lat, lng }
+async function geocodePlace(code) {
+  if (!code) return null;
+  const parts = String(code).trim().match(/^([A-Za-z]{2})\s*([A-Za-z0-9\-\s]{2,})$/);
+  if (!parts) return null;
+  const country = parts[1].toUpperCase();
+  const postal = parts[2].trim();
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?country=${country}&postalcode=${encodeURIComponent(postal)}&format=json&addressdetails=1&limit=1&accept-language=uk,en`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const arr = await res.json();
+    if (!arr?.[0]) return null;
+    const r = arr[0];
+    const a = r.address || {};
+    const city = a.city || a.town || a.village || a.municipality || a.hamlet || a.county || '';
+    return { country, postal, city, lat: Number(r.lat), lng: Number(r.lon) };
+  } catch (_) { return null; }
+}
+
 function OrderCreate({ onClose, onCreated }) {
   const [refs, setRefs] = useState({ clients: [], carriers: [], managers: [], trucks: [] });
   const [form, setForm] = useState({
     client_currency: 'EUR', carrier_currency: 'EUR',
     payment_term_client_days: 30, payment_term_carrier_days: 60,
   });
-  const upd = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const [geoBusy, setGeoBusy] = useState({ loading: false, unloading: false });
+  const upd = (k) => (e) => setForm((f) => ({ ...f, [k]: e?.target ? e.target.value : e }));
+  const updVal = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   useEffect(() => { void (async () => {
     const [c, cr, m, t] = await Promise.all([
@@ -458,10 +480,29 @@ function OrderCreate({ onClose, onCreated }) {
     setRefs({ clients: c.data ?? [], carriers: cr.data ?? [], managers: m.data ?? [], trucks: t.data ?? [] });
   })(); }, []);
 
+  const resolveGeo = async (side) => {
+    const placeKey = side + '_place';
+    const code = form[placeKey];
+    if (!code) return;
+    setGeoBusy((b) => ({ ...b, [side]: true }));
+    const geo = await geocodePlace(code);
+    setGeoBusy((b) => ({ ...b, [side]: false }));
+    if (!geo) return toast('Не знайдено в OSM: ' + code, 'error');
+    setForm((f) => ({
+      ...f,
+      [side + '_country']: geo.country,
+      [side + '_post_code']: geo.postal,
+      [side + '_city']: geo.city || f[side + '_city'] || '',
+      [side + '_lat']: geo.lat,
+      [side + '_lng']: geo.lng,
+    }));
+    toast(`${side === 'loading' ? 'Завантаження' : 'Розвантаження'}: ${geo.city || '?'} (${geo.country} ${geo.postal})`, 'success');
+  };
+
   const save = async (e) => {
     e.preventDefault();
     const payload = { ...form };
-    ['turnover_netto_original', 'price_carrier_netto_original', 'payment_term_client_days', 'payment_term_carrier_days']
+    ['turnover_netto_original', 'price_carrier_netto_original', 'payment_term_client_days', 'payment_term_carrier_days', 'loading_lat', 'loading_lng', 'unloading_lat', 'unloading_lng']
       .forEach((k) => { if (payload[k] === '' || payload[k] == null) delete payload[k]; else payload[k] = Number(payload[k]); });
     ['loading_date', 'unloading_date'].forEach((k) => { if (!payload[k]) delete payload[k]; });
     const { data, error } = await sb.from('orders').insert(payload).select('id').single();
@@ -470,72 +511,137 @@ function OrderCreate({ onClose, onCreated }) {
     onCreated(data.id);
   };
 
-  const Fld = ({ label, children }) => html`
-    <div className="space-y-1">
-      <label className="text-sm font-medium">${label}</label>${children}
-    </div>
-  `;
   const inp = 'w-full h-9 px-3 rounded-md border border-slate-300';
+  const lbl = 'block text-sm font-medium mb-1';
 
   return html`
     <${Drawer} title="Нове замовлення" onClose=${onClose}>
       <form onSubmit=${save} className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <${Fld} label="Клієнт">
-            <select className=${inp} value=${form.client_id ?? ''} onChange=${(e) => upd('client_id', e.target.value || null)}>
+          <div>
+            <label className=${lbl}>Клієнт</label>
+            <select className=${inp} value=${form.client_id ?? ''} onChange=${upd('client_id')}>
               <option value="">—</option>
               ${refs.clients.map((c) => html`<option key=${c.id} value=${c.id}>${c.company_name}</option>`)}
             </select>
-          <//>
-          <${Fld} label="Менеджер">
-            <select className=${inp} value=${form.manager_id ?? ''} onChange=${(e) => upd('manager_id', e.target.value || null)}>
+          </div>
+          <div>
+            <label className=${lbl}>Менеджер</label>
+            <select className=${inp} value=${form.manager_id ?? ''} onChange=${upd('manager_id')}>
               <option value="">—</option>
               ${refs.managers.map((m) => html`<option key=${m.id} value=${m.id}>${m.code} · ${m.full_name}</option>`)}
             </select>
-          <//>
-          <${Fld} label="Номер замовлення клієнта"><input className=${inp} value=${form.client_order_number ?? ''} onChange=${(e) => upd('client_order_number', e.target.value)} /><//>
+          </div>
+          <div>
+            <label className=${lbl}>Номер замовлення клієнта</label>
+            <input className=${inp} value=${form.client_order_number ?? ''} onChange=${upd('client_order_number')} />
+          </div>
           <div></div>
-          <${Fld} label="Місце завантаження (код)"><input className=${inp} placeholder="DE 12345" value=${form.loading_place ?? ''} onChange=${(e) => upd('loading_place', e.target.value)} /><//>
-          <${Fld} label="Дата завантаження"><input className=${inp} type="date" value=${form.loading_date ?? ''} onChange=${(e) => upd('loading_date', e.target.value)} /><//>
-          <${Fld} label="Адреса завантаження"><input className=${inp} value=${form.loading_address ?? ''} onChange=${(e) => upd('loading_address', e.target.value)} /><//>
-          <div></div>
-          <${Fld} label="Місце розвантаження (код)"><input className=${inp} value=${form.unloading_place ?? ''} onChange=${(e) => upd('unloading_place', e.target.value)} /><//>
-          <${Fld} label="Дата розвантаження"><input className=${inp} type="date" value=${form.unloading_date ?? ''} onChange=${(e) => upd('unloading_date', e.target.value)} /><//>
-          <${Fld} label="Адреса розвантаження"><input className=${inp} value=${form.unloading_address ?? ''} onChange=${(e) => upd('unloading_address', e.target.value)} /><//>
         </div>
-        <hr />
+
+        <div className="rounded-lg border p-3 space-y-3">
+          <div className="text-sm font-semibold text-brand">🚛 Завантаження</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className=${lbl}>Країна + індекс</label>
+              <div className="flex gap-1">
+                <input className=${inp} placeholder="DE 60486" value=${form.loading_place ?? ''}
+                  onChange=${upd('loading_place')}
+                  onBlur=${() => resolveGeo('loading')} />
+                <button type="button" onClick=${() => resolveGeo('loading')}
+                  disabled=${geoBusy.loading}
+                  className="h-9 px-2 rounded-md border text-sm whitespace-nowrap"
+                  title="Знайти в OSM">🔍</button>
+              </div>
+            </div>
+            <div>
+              <label className=${lbl}>Місто ${geoBusy.loading ? html`<span className="loader" style=${{ width: 10, height: 10, borderWidth: 1.5 }}/>` : ''}</label>
+              <input className=${inp} value=${form.loading_city ?? ''} onChange=${upd('loading_city')} />
+            </div>
+            <div>
+              <label className=${lbl}>Дата</label>
+              <input className=${inp} type="date" value=${form.loading_date ?? ''} onChange=${upd('loading_date')} />
+            </div>
+            <div className="md:col-span-3">
+              <label className=${lbl}>Адреса (вулиця / назва об'єкта)</label>
+              <input className=${inp} value=${form.loading_address ?? ''} onChange=${upd('loading_address')} />
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-3 space-y-3">
+          <div className="text-sm font-semibold text-emerald-700">📦 Розвантаження</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className=${lbl}>Країна + індекс</label>
+              <div className="flex gap-1">
+                <input className=${inp} placeholder="AT 2282" value=${form.unloading_place ?? ''}
+                  onChange=${upd('unloading_place')}
+                  onBlur=${() => resolveGeo('unloading')} />
+                <button type="button" onClick=${() => resolveGeo('unloading')}
+                  disabled=${geoBusy.unloading}
+                  className="h-9 px-2 rounded-md border text-sm whitespace-nowrap"
+                  title="Знайти в OSM">🔍</button>
+              </div>
+            </div>
+            <div>
+              <label className=${lbl}>Місто ${geoBusy.unloading ? html`<span className="loader" style=${{ width: 10, height: 10, borderWidth: 1.5 }}/>` : ''}</label>
+              <input className=${inp} value=${form.unloading_city ?? ''} onChange=${upd('unloading_city')} />
+            </div>
+            <div>
+              <label className=${lbl}>Дата</label>
+              <input className=${inp} type="date" value=${form.unloading_date ?? ''} onChange=${upd('unloading_date')} />
+            </div>
+            <div className="md:col-span-3">
+              <label className=${lbl}>Адреса</label>
+              <input className=${inp} value=${form.unloading_address ?? ''} onChange=${upd('unloading_address')} />
+            </div>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <${Fld} label="Перевізник">
-            <select className=${inp} value=${form.carrier_id ?? ''} onChange=${(e) => upd('carrier_id', e.target.value || null)}>
+          <div>
+            <label className=${lbl}>Перевізник</label>
+            <select className=${inp} value=${form.carrier_id ?? ''} onChange=${upd('carrier_id')}>
               <option value="">—</option>
               ${refs.carriers.map((c) => html`<option key=${c.id} value=${c.id}>${c.company_name}${c.is_own_fleet ? ' ✓' : ''}</option>`)}
             </select>
-          <//>
-          <${Fld} label="Вантажівка">
-            <select className=${inp} value=${form.truck_id ?? ''} onChange=${(e) => upd('truck_id', e.target.value || null)}>
+          </div>
+          <div>
+            <label className=${lbl}>Вантажівка</label>
+            <select className=${inp} value=${form.truck_id ?? ''} onChange=${upd('truck_id')}>
               <option value="">—</option>
               ${refs.trucks.filter((t) => !form.carrier_id || t.carrier_id === form.carrier_id).map((t) => html`<option key=${t.id} value=${t.id}>${t.name}</option>`)}
             </select>
-          <//>
-          <${Fld} label="Оборот netto (клієнт)">
+          </div>
+          <div>
+            <label className=${lbl}>Оборот netto (клієнт)</label>
             <div className="flex gap-2">
-              <input className=${inp} type="number" step="0.01" value=${form.turnover_netto_original ?? ''} onChange=${(e) => upd('turnover_netto_original', e.target.value)} />
-              <select className="h-9 w-24 rounded-md border border-slate-300 px-2" value=${form.client_currency} onChange=${(e) => upd('client_currency', e.target.value)}>
+              <input className=${inp} type="number" step="0.01" value=${form.turnover_netto_original ?? ''} onChange=${upd('turnover_netto_original')} />
+              <select className="h-9 w-24 rounded-md border border-slate-300 px-2" value=${form.client_currency} onChange=${upd('client_currency')}>
                 <option>EUR</option><option>PLN</option>
               </select>
             </div>
-          <//>
-          <${Fld} label="Ціна перевізнику netto">
+          </div>
+          <div>
+            <label className=${lbl}>Ціна перевізнику netto</label>
             <div className="flex gap-2">
-              <input className=${inp} type="number" step="0.01" value=${form.price_carrier_netto_original ?? ''} onChange=${(e) => upd('price_carrier_netto_original', e.target.value)} />
-              <select className="h-9 w-24 rounded-md border border-slate-300 px-2" value=${form.carrier_currency} onChange=${(e) => upd('carrier_currency', e.target.value)}>
+              <input className=${inp} type="number" step="0.01" value=${form.price_carrier_netto_original ?? ''} onChange=${upd('price_carrier_netto_original')} />
+              <select className="h-9 w-24 rounded-md border border-slate-300 px-2" value=${form.carrier_currency} onChange=${upd('carrier_currency')}>
                 <option>EUR</option><option>PLN</option>
               </select>
             </div>
-          <//>
-          <${Fld} label="Payment term клієнта (дн)"><input className=${inp} type="number" value=${form.payment_term_client_days} onChange=${(e) => upd('payment_term_client_days', e.target.value)} /><//>
-          <${Fld} label="Payment term перевізнику (дн)"><input className=${inp} type="number" value=${form.payment_term_carrier_days} onChange=${(e) => upd('payment_term_carrier_days', e.target.value)} /><//>
+          </div>
+          <div>
+            <label className=${lbl}>Payment term клієнта (дн)</label>
+            <input className=${inp} type="number" value=${form.payment_term_client_days} onChange=${upd('payment_term_client_days')} />
+          </div>
+          <div>
+            <label className=${lbl}>Payment term перевізнику (дн)</label>
+            <input className=${inp} type="number" value=${form.payment_term_carrier_days} onChange=${upd('payment_term_carrier_days')} />
+          </div>
         </div>
+
         <div className="flex gap-2 pt-2">
           <button type="submit" className="h-9 px-4 rounded-md bg-brand text-white font-medium">Зберегти</button>
           <button type="button" onClick=${onClose} className="h-9 px-4 rounded-md border">Скасувати</button>
@@ -605,7 +711,7 @@ function OrderDetail({ id, onClose, onSaved }) {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-xl border p-4 bg-white">
             <div className="font-semibold mb-2">Завантаження</div>
-            <${R} k="Місце" v=${`${order.loading_place ?? ''} ${order.loading_address ?? ''}`.trim() || '—'} />
+            <${R} k="Місце" v=${[order.loading_place, order.loading_city, order.loading_address].filter(Boolean).join(' · ') || '—'} />
             <${R} k="Дата" v=${DATE(order.loading_date)} />
             <${R} k="Час" v=${`${order.loading_time_from ?? ''}–${order.loading_time_to ?? ''}`} />
             <${R} k="Reference" v=${order.loading_reference} />
@@ -613,7 +719,7 @@ function OrderDetail({ id, onClose, onSaved }) {
           </div>
           <div className="rounded-xl border p-4 bg-white">
             <div className="font-semibold mb-2">Розвантаження</div>
-            <${R} k="Місце" v=${`${order.unloading_place ?? ''} ${order.unloading_address ?? ''}`.trim() || '—'} />
+            <${R} k="Місце" v=${[order.unloading_place, order.unloading_city, order.unloading_address].filter(Boolean).join(' · ') || '—'} />
             <${R} k="Дата" v=${DATE(order.unloading_date)} />
             <${R} k="Час" v=${`${order.unloading_time_from ?? ''}–${order.unloading_time_to ?? ''}`} />
             <${R} k="Reference" v=${order.unloading_reference} />
