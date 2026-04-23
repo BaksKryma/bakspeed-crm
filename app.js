@@ -100,32 +100,63 @@ const Link = ({ to, children, className }) => {
 
 // ========= Sign-in page =========
 function SignIn() {
+  const [mode, setMode] = useState('password'); // 'password' | 'magic'
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
-    const { error } = await sb.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: location.origin + location.pathname },
-    });
-    setBusy(false);
-    if (error) toast(error.message, 'error');
-    else toast('Лінк надіслано на пошту', 'success');
+    if (mode === 'password') {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      setBusy(false);
+      if (error) toast(error.message, 'error');
+    } else {
+      const { error } = await sb.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: location.origin + location.pathname },
+      });
+      setBusy(false);
+      if (error) toast(error.message, 'error');
+      else toast('Лінк надіслано на пошту', 'success');
+    }
   };
+
   return html`
     <div className="min-h-screen grid place-items-center bg-gradient-to-br from-orange-100 to-white">
       <form onSubmit=${submit} className="bg-white p-8 rounded-2xl shadow-lg w-[min(420px,90vw)]">
         <div className="text-2xl font-bold text-brand">Bakspeed</div>
         <div className="text-xs text-slate-500 tracking-widest mb-6">SPEED YOU CAN TRUST</div>
+
+        <div className="inline-flex gap-1 bg-slate-100 p-1 rounded-lg mb-4 text-sm">
+          <button type="button" onClick=${() => setMode('password')}
+            className=${`px-3 py-1 rounded-md ${mode === 'password' ? 'bg-white shadow font-medium' : 'text-slate-600'}`}>
+            Пароль
+          </button>
+          <button type="button" onClick=${() => setMode('magic')}
+            className=${`px-3 py-1 rounded-md ${mode === 'magic' ? 'bg-white shadow font-medium' : 'text-slate-600'}`}>
+            Magic link
+          </button>
+        </div>
+
         <label className="block mb-2 text-sm font-medium">Email</label>
         <input type="email" required value=${email} onChange=${(e) => setEmail(e.target.value)}
+          autoComplete="email"
           className="w-full h-10 px-3 rounded-md border border-slate-300 mb-4" />
+
+        ${mode === 'password' ? html`
+          <label className="block mb-2 text-sm font-medium">Пароль</label>
+          <input type="password" required value=${password} onChange=${(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            className="w-full h-10 px-3 rounded-md border border-slate-300 mb-4" />
+        ` : null}
+
         <button type="submit" disabled=${busy}
           className="w-full h-10 rounded-md bg-brand text-white font-medium hover:bg-brand-dark">
-          ${busy ? 'Надсилаю…' : 'Отримати magic link'}
+          ${busy ? 'Зачекайте…' : mode === 'password' ? 'Увійти' : 'Отримати magic link'}
         </button>
-        <div className="mt-3 text-xs text-slate-500">Лінк прийде на пошту — відкрийте в цьому браузері.</div>
+        ${mode === 'magic' ? html`<div className="mt-3 text-xs text-slate-500">Лінк прийде на пошту — відкрийте в цьому браузері.</div>` : null}
       </form>
     </div>
   `;
@@ -1008,6 +1039,178 @@ function AiPage() {
   `;
 }
 
+// ========= Managers (owner-only auth user creation) =========
+function ManagersPage() {
+  const { profile } = useAuth();
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ role: 'manager' });
+  const isOwner = profile?.role === 'owner';
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await sb.from('managers').select('*').order('created_at', { ascending: false });
+    setRows(data ?? []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const create = async () => {
+    if (!form.email || !form.password || !form.code || !form.full_name) {
+      return toast('Email, пароль, код і ім\'я — обов\'язкові', 'error');
+    }
+    const { data, error } = await sb.functions.invoke('admin_create_manager', { body: form });
+    if (error) return toast(error.message, 'error');
+    if (data?.error) return toast(data.error, 'error');
+    toast('Менеджера створено', 'success');
+    setCreating(false);
+    setForm({ role: 'manager' });
+    load();
+  };
+
+  const toggleActive = async (m) => {
+    const { error } = await sb.from('managers').update({ is_active: !m.is_active }).eq('id', m.id);
+    if (error) return toast(error.message, 'error');
+    load();
+  };
+
+  const inp = 'w-full h-9 px-3 rounded-md border border-slate-300';
+
+  return html`
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Менеджери (${rows.length})</h2>
+        ${isOwner ? html`
+          <button onClick=${() => setCreating(true)} className="h-9 px-4 rounded-md bg-brand text-white text-sm font-medium">+ Новий менеджер</button>
+        ` : html`<div className="text-xs text-slate-500">Створювати може лише owner</div>`}
+      </div>
+
+      <div className="rounded-xl border bg-white overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="text-xs uppercase text-slate-500 bg-slate-50">
+            <tr>
+              <th className="text-left p-3">Код</th>
+              <th className="text-left p-3">Ім'я</th>
+              <th className="text-left p-3">Email</th>
+              <th className="text-left p-3">Телефон</th>
+              <th className="text-left p-3">Telegram</th>
+              <th className="text-left p-3">Роль</th>
+              <th className="text-left p-3">Auth</th>
+              <th className="text-center p-3">Активний</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${loading ? html`<tr><td colSpan="8" className="p-10 text-center"><span className="loader" /></td></tr>` :
+              rows.length === 0 ? html`<tr><td colSpan="8" className="p-6 text-center text-slate-500">Немає</td></tr>` :
+              rows.map((m) => html`
+                <tr key=${m.id} className="border-t hover:bg-slate-50">
+                  <td className="p-3 font-mono">${m.code}</td>
+                  <td className="p-3">${m.full_name}</td>
+                  <td className="p-3">${m.email ?? '—'}</td>
+                  <td className="p-3">${m.phone ?? '—'}</td>
+                  <td className="p-3">${m.telegram_chat_id ?? '—'}</td>
+                  <td className="p-3"><span className="text-xs px-2 py-0.5 rounded bg-slate-100">${m.role}</span></td>
+                  <td className="p-3 text-xs">${m.user_id ? html`<span className="text-emerald-700">✓ прив'язано</span>` : html`<span className="text-slate-400">не прив'язано</span>`}</td>
+                  <td className="p-3 text-center">
+                    <input type="checkbox" checked=${m.is_active} disabled=${!isOwner} onChange=${() => toggleActive(m)} />
+                  </td>
+                </tr>
+              `)}
+          </tbody>
+        </table>
+      </div>
+
+      ${creating ? html`
+        <${Drawer} title="Новий менеджер" onClose=${() => { setCreating(false); setForm({ role: 'manager' }); }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Код *</label>
+              <input className=${inp} placeholder="SK" value=${form.code ?? ''} onChange=${(e) => setForm({ ...form, code: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Ім'я *</label>
+              <input className=${inp} value=${form.full_name ?? ''} onChange=${(e) => setForm({ ...form, full_name: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Email *</label>
+              <input className=${inp} type="email" value=${form.email ?? ''} onChange=${(e) => setForm({ ...form, email: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Пароль *</label>
+              <input className=${inp} type="text" value=${form.password ?? ''} onChange=${(e) => setForm({ ...form, password: e.target.value })} placeholder="мін 6 символів" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Телефон</label>
+              <input className=${inp} value=${form.phone ?? ''} onChange=${(e) => setForm({ ...form, phone: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Telegram chat_id</label>
+              <input className=${inp} value=${form.telegram_chat_id ?? ''} onChange=${(e) => setForm({ ...form, telegram_chat_id: e.target.value })} />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-sm font-medium">Роль</label>
+              <select className=${inp} value=${form.role} onChange=${(e) => setForm({ ...form, role: e.target.value })}>
+                <option value="manager">manager — звичайний диспетчер</option>
+                <option value="accountant">accountant — бухгалтер (платежі, фактури)</option>
+                <option value="viewer">viewer — лише перегляд</option>
+                <option value="owner">owner — повні права</option>
+              </select>
+            </div>
+          </div>
+          <div className="mt-3 text-xs text-slate-500 bg-amber-50 border border-amber-200 rounded-md p-2">
+            💡 Менеджер зможе увійти за вказаним email + паролем. Пароль можна буде змінити після першого входу у «Мій профіль».
+          </div>
+          <div className="flex gap-2 pt-4">
+            <button onClick=${create} className="h-9 px-4 rounded-md bg-brand text-white">Створити</button>
+            <button onClick=${() => { setCreating(false); setForm({ role: 'manager' }); }} className="h-9 px-4 rounded-md border">Скасувати</button>
+          </div>
+        <//>
+      ` : null}
+    </div>
+  `;
+}
+
+// ========= My profile / change password =========
+function ProfilePanel() {
+  const { session, profile } = useAuth();
+  const [newPass, setNewPass] = useState('');
+  const [newPass2, setNewPass2] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const change = async () => {
+    if (newPass.length < 6) return toast('Пароль мін. 6 символів', 'error');
+    if (newPass !== newPass2) return toast('Паролі не збігаються', 'error');
+    setBusy(true);
+    const { error } = await sb.auth.updateUser({ password: newPass });
+    setBusy(false);
+    if (error) return toast(error.message, 'error');
+    toast('Пароль змінено', 'success');
+    setNewPass(''); setNewPass2('');
+  };
+
+  const inp = 'w-full h-9 px-3 rounded-md border border-slate-300';
+
+  return html`
+    <div className="rounded-xl border bg-white p-5 text-sm space-y-3 max-w-lg">
+      <div className="font-semibold">Мій профіль</div>
+      <div className="text-xs text-slate-500 space-y-0.5">
+        <div><b>Email:</b> ${session?.user?.email}</div>
+        <div><b>Код менеджера:</b> ${profile?.code ?? '—'}</div>
+        <div><b>Ім'я:</b> ${profile?.full_name ?? '—'}</div>
+        <div><b>Роль:</b> ${profile?.role ?? '—'}</div>
+      </div>
+      <hr />
+      <div className="font-semibold">Змінити пароль</div>
+      <div className="space-y-2">
+        <input type="password" className=${inp} placeholder="Новий пароль (мін 6)" value=${newPass} onChange=${(e) => setNewPass(e.target.value)} />
+        <input type="password" className=${inp} placeholder="Повторіть пароль" value=${newPass2} onChange=${(e) => setNewPass2(e.target.value)} />
+        <button onClick=${change} disabled=${busy} className="h-9 px-4 rounded-md bg-brand text-white">${busy ? 'Зачекайте…' : 'Змінити пароль'}</button>
+      </div>
+    </div>
+  `;
+}
+
 // ========= Settings =========
 function SettingsPage() {
   const [tab, setTab] = useState('company');
@@ -1015,7 +1218,8 @@ function SettingsPage() {
   return html`
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-semibold">Налаштування</h1>
-      <div className="inline-flex gap-1 bg-slate-100 p-1 rounded-lg">
+      <div className="inline-flex gap-1 bg-slate-100 p-1 rounded-lg flex-wrap">
+        <${Tab} id="profile">Мій профіль<//>
         <${Tab} id="company">Реквізити<//>
         <${Tab} id="managers">Користувачі<//>
         <${Tab} id="trucks">Вантажівки<//>
@@ -1023,6 +1227,7 @@ function SettingsPage() {
         <${Tab} id="templates">Шаблони<//>
         <${Tab} id="penalties">Warunki<//>
       </div>
+      ${tab === 'profile' ? html`<${ProfilePanel} />` : null}
       ${tab === 'company' ? html`
         <div className="rounded-xl border bg-white p-5 text-sm space-y-2">
           <div className="font-semibold text-lg">Bakspeed Sp. z o.o.</div>
@@ -1035,13 +1240,7 @@ function SettingsPage() {
           <div className="text-xs text-slate-500 mt-4 tracking-widest">SPEED YOU CAN TRUST</div>
         </div>
       ` : null}
-      ${tab === 'managers' ? html`<${CrudPage} title="Менеджери" table="managers" searchField="full_name" columns=${[
-        { key: 'code', label: 'Код' }, { key: 'full_name', label: 'Ім\'я' },
-        { key: 'email', label: 'Email' }, { key: 'phone', label: 'Телефон' },
-        { key: 'telegram_chat_id', label: 'Telegram' },
-        { key: 'role', label: 'Роль', options: [{ value: 'owner', label: 'owner' }, { value: 'manager', label: 'manager' }, { value: 'accountant', label: 'accountant' }, { value: 'viewer', label: 'viewer' }] },
-        { key: 'is_active', label: 'Активний', type: 'boolean' },
-      ]} />` : null}
+      ${tab === 'managers' ? html`<${ManagersPage} />` : null}
       ${tab === 'trucks' ? html`<${CrudPage} title="Вантажівки" table="trucks" searchField="name" columns=${[
         { key: 'name', label: 'Код' },
         { key: 'carrier_id', label: 'Перевізник', fk: { table: 'carriers', label: 'company_name' } },
