@@ -671,16 +671,25 @@ function OrderCreate({ onClose, onCreated }) {
 
 function OrderDetail({ id, onClose, onSaved }) {
   const [order, setOrder] = useState(null);
+  const [loadErr, setLoadErr] = useState(null);
   const [tab, setTab] = useState('overview');
   const [events, setEvents] = useState([]);
   const [docs, setDocs] = useState([]);
   const [notes, setNotes] = useState([]);
 
   const load = useCallback(async () => {
-    const { data } = await sb.from('orders')
-      .select('*, client:clients(*), manager:managers(*), carrier:carriers(*), truck:trucks(*), driver:drivers(*)')
-      .eq('id', id).single();
-    setOrder(data);
+    setLoadErr(null);
+    try {
+      const { data, error } = await sb.from('orders')
+        .select('*, client:clients(*), manager:managers(*), carrier:carriers(*), truck:trucks(*), driver:drivers(*)')
+        .eq('id', id).maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('Замовлення не знайдено (можливо прибрано RLS).');
+      setOrder(data);
+    } catch (e) {
+      setLoadErr(String(e.message ?? e));
+      toast('Картка замовлення: ' + (e.message ?? e), 'error');
+    }
   }, [id]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -702,7 +711,14 @@ function OrderDetail({ id, onClose, onSaved }) {
     toast(`Статус: ${STATUS_LABEL[status]}`, 'success');
   };
 
-  if (!order) return html`<${Drawer} title="..." onClose=${onClose}><div className="p-10 text-center"><span className="loader" /></div><//>`;
+  if (!order) return html`<${Drawer} title=${loadErr ? 'Помилка' : '...'} onClose=${onClose}>
+    ${loadErr ? html`
+      <div className="p-6 space-y-3">
+        <div className="text-red-600 text-sm whitespace-pre-wrap">${loadErr}</div>
+        <button onClick=${load} className="h-9 px-4 rounded-md bg-brand text-white text-sm">Спробувати ще</button>
+      </div>
+    ` : html`<div className="p-10 text-center"><span className="loader" /></div>`}
+  <//>`;
 
   const R = ({ k, v }) => html`<div className="flex justify-between gap-4 text-sm py-1"><span className="text-slate-500">${k}</span><span className="font-medium text-right">${v ?? '—'}</span></div>`;
   const Tab = ({ id: tid, children }) => html`
