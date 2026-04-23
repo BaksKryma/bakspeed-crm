@@ -336,7 +336,7 @@ function StatusBadge({ status }) {
   return html`<span className=${`inline-flex px-2 py-0.5 text-xs font-medium rounded ${STATUS_BADGE[status] || 'bg-slate-100'}`}>${STATUS_LABEL[status] || status}</span>`;
 }
 
-function OrdersTable({ rows }) {
+function OrdersTable({ rows, onEdit, onDelete }) {
   if (!rows.length) return html`<div className="p-6 text-sm text-slate-500">Немає даних</div>`;
   return html`
     <div className="overflow-auto">
@@ -352,6 +352,7 @@ function OrdersTable({ rows }) {
             <th className="text-right p-3">Оборот</th>
             <th className="text-right p-3">Маржа</th>
             <th className="text-left p-3">Статус</th>
+            ${onEdit || onDelete ? html`<th className="p-3 w-28"></th>` : null}
           </tr>
         </thead>
         <tbody>
@@ -368,6 +369,12 @@ function OrdersTable({ rows }) {
               <td className="p-3 text-right numeric">${EUR(o.turnover_netto_eur)}</td>
               <td className="p-3 text-right numeric">${EUR(o.delta_netto_eur)}</td>
               <td className="p-3"><${StatusBadge} status=${o.status} /></td>
+              ${onEdit || onDelete ? html`
+                <td className="p-3 text-right whitespace-nowrap">
+                  ${onEdit ? html`<button onClick=${() => onEdit(o)} title="Редагувати" className="text-slate-600 hover:text-brand mr-3">✏️</button>` : null}
+                  ${onDelete ? html`<button onClick=${() => onDelete(o)} title="Видалити" className="text-slate-600 hover:text-red-600">🗑</button>` : null}
+                </td>
+              ` : null}
             </tr>
           `)}
         </tbody>
@@ -384,6 +391,7 @@ function OrdersPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState(null); // full order row or null
 
   const detailId = path.match(/^\/orders\/(.+)$/)?.[1];
 
@@ -400,6 +408,21 @@ function OrdersPage() {
   }, [search, status]);
 
   useEffect(() => { load(); }, [load]);
+
+  const openEdit = async (row) => {
+    const { data, error } = await sb.from('orders').select('*').eq('id', row.id).maybeSingle();
+    if (error) return toast(error.message, 'error');
+    setEditing(data);
+  };
+
+  const del = async (row) => {
+    if (!confirm(`Видалити ${row.our_order_number}?`)) return;
+    const { error } = await sb.from('orders').delete().eq('id', row.id);
+    if (error) return toast(error.message, 'error');
+    toast('Видалено', 'success');
+    if (detailId === row.id) navigate('/orders');
+    load();
+  };
 
   return html`
     <div className="p-6 space-y-4">
@@ -420,11 +443,12 @@ function OrdersPage() {
       </div>
 
       <div className="rounded-xl border bg-white">
-        ${loading ? html`<div className="p-10 text-center"><span className="loader" /></div>` : html`<${OrdersTable} rows=${rows} />`}
+        ${loading ? html`<div className="p-10 text-center"><span className="loader" /></div>` : html`<${OrdersTable} rows=${rows} onEdit=${openEdit} onDelete=${del} />`}
       </div>
 
-      ${creating ? html`<${OrderCreate} onClose=${() => setCreating(false)} onCreated=${(id) => { setCreating(false); load(); navigate(`/orders/${id}`); }} />` : null}
-      ${detailId ? html`<${OrderDetail} id=${detailId} onClose=${() => navigate('/orders')} onSaved=${load} />` : null}
+      ${creating ? html`<${OrderForm} onClose=${() => setCreating(false)} onSaved=${(id) => { setCreating(false); load(); navigate(`/orders/${id}`); }} />` : null}
+      ${editing ? html`<${OrderForm} initial=${editing} onClose=${() => setEditing(null)} onSaved=${() => { setEditing(null); load(); }} />` : null}
+      ${detailId ? html`<${OrderDetail} id=${detailId} onClose=${() => navigate('/orders')} onSaved=${load} onEdit=${openEdit} onDelete=${del} />` : null}
     </div>
   `;
 }
@@ -467,9 +491,10 @@ async function geocodePlace(code) {
   } catch (_) { return null; }
 }
 
-function OrderCreate({ onClose, onCreated }) {
+function OrderForm({ initial, onClose, onSaved }) {
+  const isEdit = !!initial?.id;
   const [refs, setRefs] = useState({ clients: [], carriers: [], managers: [], trucks: [] });
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => initial ? { ...initial } : {
     client_currency: 'EUR', carrier_currency: 'EUR',
     payment_term_client_days: 30, payment_term_carrier_days: 60,
   });
@@ -511,20 +536,37 @@ function OrderCreate({ onClose, onCreated }) {
   const save = async (e) => {
     e.preventDefault();
     const payload = { ...form };
+    // Strip embedded/read-only/generated fields (come back from SELECT when editing)
+    ['client', 'manager', 'carrier', 'truck', 'driver',
+     'turnover_vat_original', 'turnover_brutto_original',
+     'price_carrier_vat_original', 'price_carrier_brutto_original',
+     'delta_netto_eur', 'price_per_km_eur',
+     'our_order_number', 'created_at', 'updated_at', 'created_by']
+      .forEach((k) => delete payload[k]);
     ['turnover_netto_original', 'price_carrier_netto_original', 'payment_term_client_days', 'payment_term_carrier_days', 'loading_lat', 'loading_lng', 'unloading_lat', 'unloading_lng']
       .forEach((k) => { if (payload[k] === '' || payload[k] == null) delete payload[k]; else payload[k] = Number(payload[k]); });
     ['loading_date', 'unloading_date'].forEach((k) => { if (!payload[k]) delete payload[k]; });
-    const { data, error } = await sb.from('orders').insert(payload).select('id').single();
-    if (error) return toast(error.message, 'error');
-    toast('Замовлення створено', 'success');
-    onCreated(data.id);
+
+    if (isEdit) {
+      const id = payload.id; delete payload.id;
+      const { error } = await sb.from('orders').update(payload).eq('id', id);
+      if (error) return toast(error.message, 'error');
+      toast('Замовлення оновлено', 'success');
+      onSaved(id);
+    } else {
+      delete payload.id;
+      const { data, error } = await sb.from('orders').insert(payload).select('id').single();
+      if (error) return toast(error.message, 'error');
+      toast('Замовлення створено', 'success');
+      onSaved(data.id);
+    }
   };
 
   const inp = 'w-full h-9 px-3 rounded-md border border-slate-300';
   const lbl = 'block text-sm font-medium mb-1';
 
   return html`
-    <${Drawer} title="Нове замовлення" onClose=${onClose}>
+    <${Drawer} title=${isEdit ? `Редагувати ${initial.our_order_number}` : 'Нове замовлення'} onClose=${onClose}>
       <form onSubmit=${save} className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
@@ -670,7 +712,7 @@ function OrderCreate({ onClose, onCreated }) {
         </div>
 
         <div className="flex gap-2 pt-2">
-          <button type="submit" className="h-9 px-4 rounded-md bg-brand text-white font-medium">Зберегти</button>
+          <button type="submit" className="h-9 px-4 rounded-md bg-brand text-white font-medium">${isEdit ? 'Зберегти зміни' : 'Створити'}</button>
           <button type="button" onClick=${onClose} className="h-9 px-4 rounded-md border">Скасувати</button>
         </div>
       </form>
@@ -678,7 +720,7 @@ function OrderCreate({ onClose, onCreated }) {
   `;
 }
 
-function OrderDetail({ id, onClose, onSaved }) {
+function OrderDetail({ id, onClose, onSaved, onEdit, onDelete }) {
   const [order, setOrder] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
   const [tab, setTab] = useState('overview');
@@ -840,6 +882,7 @@ function OrderDetail({ id, onClose, onSaved }) {
 
       <hr className="my-4" />
       <div className="flex flex-wrap gap-2">
+        ${onEdit ? html`<button onClick=${() => onEdit(order)} className="h-9 px-3 rounded-md bg-slate-800 text-white text-sm">✏️ Редагувати</button>` : null}
         <button onClick=${() => invoke('generate_driver_brief')} className="h-9 px-3 rounded-md bg-brand text-white text-sm">📱 Driver Brief</button>
         ${!order.carrier?.is_own_fleet ? html`
           <button onClick=${() => invoke('generate_carrier_order_pdf')} className="h-9 px-3 rounded-md border text-sm">📄 PDF перевізнику</button>
@@ -850,6 +893,7 @@ function OrderDetail({ id, onClose, onSaved }) {
           className="h-9 px-3 rounded-md border text-sm">🧾 Фактура (Saldeo)</button>
         <button onClick=${() => markStatus('delivered')} className="h-9 px-3 rounded-md border text-sm">✓ Delivered</button>
         <button onClick=${() => markStatus('paid')} className="h-9 px-3 rounded-md border text-sm">💰 Paid</button>
+        ${onDelete ? html`<button onClick=${() => onDelete(order)} className="h-9 px-3 rounded-md border border-red-300 text-red-700 hover:bg-red-50 text-sm ml-auto">🗑 Видалити</button>` : null}
       </div>
     <//>
   `;
