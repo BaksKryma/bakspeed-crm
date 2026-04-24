@@ -383,6 +383,88 @@ function OrdersTable({ rows, onEdit, onDelete }) {
   `;
 }
 
+// Upload a PDF to orders-pdf bucket and call parse_pdf_order.
+// Returns created order_id on success, throws on error.
+async function uploadPdfAndParse(file, onStatus) {
+  onStatus?.('Завантажую файл…');
+  const path = `incoming/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]+/g, '_')}`;
+  const { error: upErr } = await sb.storage.from('orders-pdf').upload(path, file, { contentType: 'application/pdf', upsert: false });
+  if (upErr) throw new Error('Storage: ' + upErr.message);
+  onStatus?.('AI розпізнає документ…');
+  const { data, error } = await sb.functions.invoke('parse_pdf_order', { body: { storage_path: path, bucket: 'orders-pdf' } });
+  if (error) {
+    // Try to surface the function's JSON error body if present
+    const bodyErr = data?.error || (error.context?.body ? await error.context.body.text().catch(() => null) : null);
+    throw new Error(bodyErr || error.message || 'Невідома помилка Claude');
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+function PdfImportDialog({ onClose, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+
+  const handle = async (file) => {
+    if (!file) return;
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') {
+      toast('Підтримуються тільки PDF', 'error'); return;
+    }
+    setBusy(true);
+    try {
+      const res = await uploadPdfAndParse(file, setStatus);
+      toast(`Розпізнано: ${res.our_order_number}`, 'success');
+      onDone(res.order_id);
+    } catch (e) {
+      toast(String(e.message ?? e), 'error');
+    } finally {
+      setBusy(false); setStatus('');
+    }
+  };
+
+  return html`
+    <${Drawer} title="Імпорт замовлення з PDF" onClose=${busy ? () => {} : onClose}>
+      <div className="space-y-4 max-w-2xl">
+        <div className="text-sm text-slate-600">
+          Перетягніть сюди PDF-замовлення клієнта. AI розпізнає адреси завантаження/розвантаження,
+          вантаж, дати, референції та суму. Замовлення буде створене зі статусом «Чернетка» —
+          залишиться лише додати перевізника і ціну для нього.
+        </div>
+
+        <label
+          onDragOver=${(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave=${() => setDragOver(false)}
+          onDrop=${(e) => { e.preventDefault(); setDragOver(false); if (!busy) handle(e.dataTransfer.files?.[0]); }}
+          className=${`block border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${dragOver ? 'border-brand bg-orange-50' : 'border-slate-300 hover:border-brand'} ${busy ? 'pointer-events-none opacity-70' : ''}`}
+        >
+          <input type="file" accept="application/pdf,.pdf" className="hidden"
+            disabled=${busy}
+            onChange=${(e) => handle(e.target.files?.[0])} />
+          ${busy ? html`
+            <div className="flex flex-col items-center gap-2">
+              <span className="loader" style=${{ width: 28, height: 28 }} />
+              <div className="text-sm">${status || 'Обробка…'}</div>
+              <div className="text-xs text-slate-500">Зазвичай 5–15 секунд</div>
+            </div>
+          ` : html`
+            <div className="flex flex-col items-center gap-2">
+              <div className="text-4xl">📄</div>
+              <div className="font-medium">Перетягніть PDF або клацніть для вибору</div>
+              <div className="text-xs text-slate-500">Підтримуються стандартні замовлення клієнта</div>
+            </div>
+          `}
+        </label>
+
+        <div className="text-xs text-slate-500 bg-amber-50 border border-amber-200 rounded p-2">
+          💡 Після розпізнавання перевірте поля (особливо ціни й дати) — AI може помилятися.
+          PDF буде прикріплений до замовлення у вкладці «Документи».
+        </div>
+      </div>
+    <//>
+  `;
+}
+
 // ========= Orders page (list + create + detail drawer) =========
 function OrdersPage() {
   const { path, navigate } = useRouter();
@@ -391,6 +473,7 @@ function OrdersPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState(null); // full order row or null
 
   const detailId = path.match(/^\/orders\/(.+)$/)?.[1];
@@ -428,8 +511,12 @@ function OrdersPage() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Замовлення</h1>
-        <button onClick=${() => setCreating(true)}
-          className="px-4 h-9 rounded-md bg-brand text-white text-sm font-medium hover:bg-brand-dark">+ Нове замовлення</button>
+        <div className="flex gap-2">
+          <button onClick=${() => setImporting(true)}
+            className="px-4 h-9 rounded-md border border-brand text-brand text-sm font-medium hover:bg-orange-50">📄 З PDF клієнта</button>
+          <button onClick=${() => setCreating(true)}
+            className="px-4 h-9 rounded-md bg-brand text-white text-sm font-medium hover:bg-brand-dark">+ Нове замовлення</button>
+        </div>
       </div>
 
       <div className="rounded-xl border bg-white p-3 flex flex-wrap gap-2 items-center">
@@ -446,6 +533,7 @@ function OrdersPage() {
         ${loading ? html`<div className="p-10 text-center"><span className="loader" /></div>` : html`<${OrdersTable} rows=${rows} onEdit=${openEdit} onDelete=${del} />`}
       </div>
 
+      ${importing ? html`<${PdfImportDialog} onClose=${() => setImporting(false)} onDone=${(id) => { setImporting(false); load(); navigate(`/orders/${id}`); }} />` : null}
       ${creating ? html`<${OrderForm} onClose=${() => setCreating(false)} onSaved=${(id) => { setCreating(false); load(); navigate(`/orders/${id}`); }} />` : null}
       ${editing ? html`<${OrderForm} initial=${editing} onClose=${() => setEditing(null)} onSaved=${() => { setEditing(null); load(); }} />` : null}
       ${detailId ? html`<${OrderDetail} id=${detailId} onClose=${() => navigate('/orders')} onSaved=${load} onEdit=${openEdit} onDelete=${del} />` : null}

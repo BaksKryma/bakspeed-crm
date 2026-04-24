@@ -44,7 +44,8 @@
       "Bash(~/.local/bin/gh api *)",
       "Bash(curl -s https://bakskryma.github.io/bakspeed-crm/)",
       "Bash(curl -sI https://bakskryma.github.io/bakspeed-crm/app.js)",
-      "Bash(curl -sI https://bakskryma.github.io/bakspeed-crm/styles.css)"
+      "Bash(curl -sI https://bakskryma.github.io/bakspeed-crm/styles.css)",
+      "mcp__69f28225-8325-4226-8cb7-7cf8593bdd25__get_logs"
     ]
   }
 }
