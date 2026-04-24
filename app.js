@@ -384,21 +384,33 @@ function OrdersTable({ rows, onEdit, onDelete }) {
 }
 
 // Upload a PDF to orders-pdf bucket and call parse_pdf_order.
-// Returns created order_id on success, throws on error.
+// Uses direct fetch so we can reliably read the JSON error body on non-2xx.
 async function uploadPdfAndParse(file, onStatus) {
   onStatus?.('Завантажую файл…');
   const path = `incoming/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]+/g, '_')}`;
   const { error: upErr } = await sb.storage.from('orders-pdf').upload(path, file, { contentType: 'application/pdf', upsert: false });
   if (upErr) throw new Error('Storage: ' + upErr.message);
+
   onStatus?.('AI розпізнає документ…');
-  const { data, error } = await sb.functions.invoke('parse_pdf_order', { body: { storage_path: path, bucket: 'orders-pdf' } });
-  if (error) {
-    // Try to surface the function's JSON error body if present
-    const bodyErr = data?.error || (error.context?.body ? await error.context.body.text().catch(() => null) : null);
-    throw new Error(bodyErr || error.message || 'Невідома помилка Claude');
-  }
-  if (data?.error) throw new Error(data.error);
-  return data;
+  const { data: sess } = await sb.auth.getSession();
+  const token = sess?.session?.access_token;
+  if (!token) throw new Error('Не авторизований (немає токена)');
+
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/parse_pdf_order`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'apikey': SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ storage_path: path, bucket: 'orders-pdf' }),
+  });
+  const text = await res.text();
+  let body;
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text }; }
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  if (body.error) throw new Error(body.error);
+  return body;
 }
 
 function PdfImportDialog({ onClose, onDone }) {
